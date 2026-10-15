@@ -35,4 +35,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
+        # Required for device builds. Xcode > Settings > Accounts, sign in with
+        # your Apple ID, then put the team ID here and re-run `xcodegen generate`.
+        # Setting it in the Xcode UI works too, but is lost on regeneration.
+        DEVELOPMENT_TEAM: ""
         ENABLE_USER_SCRIPT_SANDBOXING: YES
