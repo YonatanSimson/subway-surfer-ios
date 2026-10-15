@@ -70,23 +70,33 @@ final class Player {
         lane = lane.shifted(by: delta)
     }
 
-    func jump() {
-        guard state != .jumping else { return }
+    /// Returns true if a jump actually began, so the caller knows whether to
+    /// play a sound.
+    @discardableResult
+    func jump() -> Bool {
+        guard state != .jumping else { return false }
         if state == .sliding { endSlide() }
         state = .jumping
         verticalVelocity = GameConfig.jumpVelocity
+        return true
     }
 
-    func slide() {
+    /// Returns true if a slide began now. A slam-down from mid-air reports
+    /// false and the sound plays on landing instead.
+    @discardableResult
+    func slide() -> Bool {
         switch state {
         case .jumping:
             // Slam down and slide the moment we touch the floor.
             verticalVelocity = min(verticalVelocity, GameConfig.fastFallVelocity)
             slideQueued = true
+            return false
         case .running:
             beginSlide()
+            return true
         case .sliding:
             slideRemaining = GameConfig.slideDuration  // re-swiping extends the slide
+            return false
         }
     }
 
@@ -129,7 +139,17 @@ final class Player {
         if slideQueued {
             slideQueued = false
             beginSlide()
+            startedSlideOnLanding = true
         }
+    }
+
+    /// Set for one frame when a queued slide fires on landing, so the view
+    /// controller can play the sound it couldn't play at swipe time.
+    private(set) var startedSlideOnLanding = false
+
+    func consumeLandingSlide() -> Bool {
+        defer { startedSlideOnLanding = false }
+        return startedSlideOnLanding
     }
 
     private func beginSlide() {

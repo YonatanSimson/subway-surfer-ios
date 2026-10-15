@@ -17,6 +17,7 @@ final class GameViewController: UIViewController {
     private let hud = HUDView()
     private var gameOverView: GameOverView?
     private let collisionFeedback = UIImpactFeedbackGenerator(style: .heavy)
+    private let sounds = SoundBank()
 
     // Run state. Only touched by the render loop while the scene is playing.
     private var distance: Float = 0
@@ -24,6 +25,8 @@ final class GameViewController: UIViewController {
     private var isGameOver = false
     private var lastUpdateTime: TimeInterval?
     private var displayedScore = -1
+    private var displayedZoneIndex = -1
+    private var coins = 0
 
     // Gestures fire on the main thread but the simulation runs on the render
     // thread, so swipes are queued here instead of mutating the player directly.
@@ -63,7 +66,7 @@ final class GameViewController: UIViewController {
         hud.frame = sceneView.bounds
         hud.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         sceneView.addSubview(hud)
-        hud.update(score: 0, best: bestScore)
+        hud.update(score: 0, best: bestScore, coins: 0)
     }
 
     private func configureGestures() {
@@ -104,8 +107,8 @@ final class GameViewController: UIViewController {
             switch input {
             case .left:  gameScene.player.move(-1)
             case .right: gameScene.player.move(1)
-            case .jump:  gameScene.player.jump()
-            case .slide: gameScene.player.slide()
+            case .jump:  if gameScene.player.jump() { sounds.play(.jump) }
+            case .slide: if gameScene.player.slide() { sounds.play(.slide) }
             }
         }
     }
@@ -116,7 +119,7 @@ final class GameViewController: UIViewController {
         UserDefaults.standard.integer(forKey: Self.bestScoreKey)
     }
 
-    private var score: Int { Int(distance) }
+    private var score: Int { Int(distance) + coins * GameConfig.coinValue }
 
     /// Called on the main thread with the scene stopped, so resetting the run
     /// state can't race the simulation.
@@ -127,6 +130,8 @@ final class GameViewController: UIViewController {
         distance = 0
         speed = GameConfig.startSpeed
         displayedScore = -1
+        displayedZoneIndex = -1
+        coins = 0
         lastUpdateTime = nil
         isGameOver = false
 
@@ -135,7 +140,7 @@ final class GameViewController: UIViewController {
         inputLock.unlock()
 
         gameScene.reset()
-        hud.update(score: 0, best: bestScore)
+        hud.update(score: 0, best: bestScore, coins: 0)
         sceneView.isPlaying = true
     }
 
@@ -154,6 +159,7 @@ final class GameViewController: UIViewController {
         overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         overlay.configure(score: finalScore,
                           best: max(finalScore, previousBest),
+                          coins: coins,
                           isNewBest: isNewBest)
         overlay.onRestart = { [weak self] in self?.startNewRun() }
         overlay.alpha = 0
@@ -163,13 +169,28 @@ final class GameViewController: UIViewController {
         UIView.animate(withDuration: 0.25) { overlay.alpha = 1 }
     }
 
+    /// Announces a new zone once, the first frame the run enters it.
+    private func publishZone() {
+        let index = gameScene.zoneIndex
+        guard index != displayedZoneIndex else { return }
+        let wasFirst = displayedZoneIndex == -1
+        displayedZoneIndex = index
+        guard !wasFirst else { return }   // don't announce the starting zone
+
+        let name = gameScene.zoneName
+        DispatchQueue.main.async { [weak self] in
+            self?.hud.announceZone(name)
+        }
+    }
+
     private func publishScore() {
         guard score != displayedScore else { return }
         displayedScore = score
         let current = score
+        let currentCoins = coins
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.hud.update(score: current, best: self.bestScore)
+            self.hud.update(score: current, best: self.bestScore, coins: currentCoins)
         }
     }
 }
@@ -197,11 +218,21 @@ extension GameViewController: SCNSceneRendererDelegate {
                     GameConfig.startSpeed + distance * GameConfig.speedGainPerMetre)
         distance += speed * dt
 
-        let wasHit = gameScene.advance(dt: dt, speed: speed, distance: distance)
-        publishScore()
+        let result = gameScene.advance(dt: dt, speed: speed, distance: distance)
 
-        if wasHit {
+        if result.coinsCollected > 0 {
+            coins += result.coinsCollected
+            sounds.play(.coin)
+        }
+        // A slide queued mid-air starts on landing, which is when it should sound.
+        if gameScene.player.consumeLandingSlide() { sounds.play(.slide) }
+
+        publishScore()
+        publishZone()
+
+        if result.hit {
             isGameOver = true
+            sounds.play(.crash)
             DispatchQueue.main.async { [weak self] in self?.finishRun() }
         }
     }

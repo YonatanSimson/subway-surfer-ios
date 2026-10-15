@@ -15,12 +15,23 @@ final class GameScene: SCNScene {
     private let cameraNode = SCNNode()
     private let trackRoot = SCNNode()
     private let obstacleRoot = SCNNode()
+    private let coinRoot = SCNNode()
 
-    private var segments: [SCNNode] = []
+    private var segments: [TrackSegment] = []
     private var obstacles: [Obstacle] = []
+    private var coins: [Coin] = []
 
     /// World distance at which the next obstacle row appears.
     private var nextSpawnDistance: Float = 0
+
+    /// Zone the player is currently in. Unwrapped and monotonic, so the view
+    /// controller can spot a change by comparing against the last value it saw.
+    private(set) var zoneIndex = 0
+    var zoneName: String { Zone.zone(atIndex: zoneIndex).name }
+
+    /// Blend step the sky image was last rebuilt at. Rebuilding a gradient per
+    /// frame would be wasteful, and the eye can't tell 16 steps from smooth.
+    private var lastSkyStep = Int.min
 
     private var cameraZ: Float { GameConfig.cameraPosition.z }
 
@@ -33,6 +44,7 @@ final class GameScene: SCNScene {
         buildLights()
         buildTrack()
         rootNode.addChildNode(obstacleRoot)
+        rootNode.addChildNode(coinRoot)
         rootNode.addChildNode(player.node)
         reset()
     }
@@ -42,14 +54,29 @@ final class GameScene: SCNScene {
     }
 
     private func buildEnvironment() {
-        background.contents = GameScene.skyGradient()
-
         // Fog does double duty: it sells depth, and it hides obstacles popping
-        // in at the spawn distance.
-        fogColor = UIColor(red: 0.10, green: 0.13, blue: 0.22, alpha: 1)
+        // in at the spawn distance. Its colour is also what actually sells a
+        // zone change, since the segments themselves re-colour out of sight.
         fogStartDistance = CGFloat(GameConfig.spawnDistance * 0.35)
         fogEndDistance = CGFloat(GameConfig.spawnDistance * 0.95)
         fogDensityExponent = 1.4
+        updateEnvironment(distance: 0)
+    }
+
+    /// Eases fog and sky between zones. Both are scene-global, so unlike the
+    /// track they can't be handled per segment.
+    private func updateEnvironment(distance: Float) {
+        let (from, to, t) = Zone.blend(atDistance: distance)
+        fogColor = UIColor.lerp(from.fog, to.fog, t)
+
+        let step = Zone.index(atDistance: distance) * 32 + Int(t * 16)
+        guard step != lastSkyStep else { return }
+        lastSkyStep = step
+        background.contents = GameScene.skyGradient(
+            top: UIColor.lerp(from.skyTop, to.skyTop, t),
+            mid: UIColor.lerp(from.skyMid, to.skyMid, t),
+            bottom: UIColor.lerp(from.skyBottom, to.skyBottom, t)
+        )
     }
 
     private func buildCamera() {
@@ -91,66 +118,10 @@ final class GameScene: SCNScene {
     private func buildTrack() {
         rootNode.addChildNode(trackRoot)
         for index in 0..<GameConfig.segmentCount {
-            let segment = makeSegment(shade: index % 2 == 0)
-            trackRoot.addChildNode(segment)
+            let segment = TrackSegment(shaded: index % 2 == 0)
+            trackRoot.addChildNode(segment.node)
             segments.append(segment)
         }
-    }
-
-    /// One slab of corridor: floor, two walls, and the lane divider stripes.
-    private func makeSegment(shade: Bool) -> SCNNode {
-        let segment = SCNNode()
-        let length = CGFloat(GameConfig.segmentLength)
-
-        let floorGeometry = SCNBox(width: CGFloat(GameConfig.corridorWidth),
-                                   height: 0.4,
-                                   length: length,
-                                   chamferRadius: 0)
-        let floorMaterial = SCNMaterial()
-        floorMaterial.lightingModel = .physicallyBased
-        floorMaterial.diffuse.contents = shade
-            ? UIColor(red: 0.20, green: 0.22, blue: 0.30, alpha: 1)
-            : UIColor(red: 0.24, green: 0.26, blue: 0.35, alpha: 1)
-        floorMaterial.roughness.contents = 0.85
-        floorGeometry.materials = [floorMaterial]
-
-        let floor = SCNNode(geometry: floorGeometry)
-        floor.position = SCNVector3(0, -0.2, 0)   // top face sits at y = 0
-        segment.addChildNode(floor)
-
-        for side in [-1, 1] {
-            let wallGeometry = SCNBox(width: 0.3,
-                                      height: CGFloat(GameConfig.wallHeight),
-                                      length: length,
-                                      chamferRadius: 0)
-            let wallMaterial = SCNMaterial()
-            wallMaterial.lightingModel = .physicallyBased
-            wallMaterial.diffuse.contents = UIColor(red: 0.13, green: 0.15, blue: 0.23, alpha: 1)
-            wallMaterial.roughness.contents = 0.7
-            wallGeometry.materials = [wallMaterial]
-
-            let wall = SCNNode(geometry: wallGeometry)
-            wall.position = SCNVector3(Float(side) * GameConfig.corridorWidth / 2,
-                                       GameConfig.wallHeight / 2,
-                                       0)
-            segment.addChildNode(wall)
-        }
-
-        // Stripes between the lanes. These are the main sense of speed.
-        for side in [-1, 1] {
-            let stripeGeometry = SCNBox(width: 0.06, height: 0.02, length: length * 0.9,
-                                        chamferRadius: 0)
-            let stripeMaterial = SCNMaterial()
-            stripeMaterial.lightingModel = .constant
-            stripeMaterial.diffuse.contents = UIColor(white: 0.85, alpha: 0.5)
-            stripeGeometry.materials = [stripeMaterial]
-
-            let stripe = SCNNode(geometry: stripeGeometry)
-            stripe.position = SCNVector3(Float(side) * GameConfig.laneWidth / 2, 0.01, 0)
-            segment.addChildNode(stripe)
-        }
-
-        return segment
     }
 
     // MARK: Run lifecycle
@@ -160,33 +131,74 @@ final class GameScene: SCNScene {
 
         // Lay the segments out from just behind the camera to past the spawn point.
         for (index, segment) in segments.enumerated() {
-            segment.position = SCNVector3(0, 0, 20 - Float(index) * GameConfig.segmentLength)
+            segment.node.position = SCNVector3(0, 0, 20 - Float(index) * GameConfig.segmentLength)
+            segment.apply(Zone.zone(atIndex: 0))
         }
         for obstacle in obstacles {
             obstacle.despawn()
         }
-        nextSpawnDistance = GameConfig.startSpacing * 2
+        for coin in coins {
+            coin.despawn()
+        }
+        nextSpawnDistance = GameConfig.firstSpawnDistance
+        zoneIndex = 0
+        lastSkyStep = Int.min
+        updateEnvironment(distance: 0)
     }
 
     // MARK: Per-frame update
 
-    /// Advances the world by one frame. Returns `true` if the player was hit.
-    func advance(dt: Float, speed: Float, distance: Float) -> Bool {
-        let dz = speed * dt
-        player.update(dt: dt)
-        recycleSegments(dz: dz)
-        let hit = advanceObstacles(dz: dz)
-        spawnIfNeeded(distance: distance)
-        return hit
+    /// What one frame of the world did to the player.
+    struct FrameResult {
+        var hit = false
+        var coinsCollected = 0
     }
 
-    private func recycleSegments(dz: Float) {
+    /// Advances the world by one frame.
+    func advance(dt: Float, speed: Float, distance: Float) -> FrameResult {
+        let dz = speed * dt
+        player.update(dt: dt)
+        recycleSegments(dz: dz, distance: distance)
+
+        var result = FrameResult()
+        result.hit = advanceObstacles(dz: dz)
+        result.coinsCollected = advanceCoins(dz: dz)
+
+        spawnIfNeeded(distance: distance, speed: speed)
+        updateEnvironment(distance: distance)
+        zoneIndex = Zone.index(atDistance: distance)
+        return result
+    }
+
+    private func advanceCoins(dz: Float) -> Int {
+        var collected = 0
+        for coin in coins where coin.isActive {
+            coin.advance(by: dz)
+            if coin.collected(by: player) {
+                collected += 1
+                coin.despawn()
+            } else if coin.isBehind(cameraZ: cameraZ) {
+                coin.despawn()
+            }
+        }
+        return collected
+    }
+
+    private func recycleSegments(dz: Float, distance: Float) {
         let trackLength = Float(GameConfig.segmentCount) * GameConfig.segmentLength
         for segment in segments {
-            segment.position.z += dz
-            if segment.position.z - GameConfig.segmentLength / 2 > cameraZ {
-                segment.position.z -= trackLength
-            }
+            segment.node.position.z += dz
+            guard segment.node.position.z - GameConfig.segmentLength / 2 > cameraZ else { continue }
+
+            segment.node.position.z -= trackLength
+            // A recycled segment is re-dressed for the zone it will be met in,
+            // not the one the player is standing in. It lands ~130m ahead,
+            // past the fog, so the re-colouring itself is never witnessed —
+            // but the resulting boundary does travel into view, which is why
+            // the palette is blended across the band rather than flipped.
+            let meetDistance = distance - segment.node.position.z
+            let (from, to, t) = Zone.blend(atDistance: meetDistance)
+            segment.apply(from: from, to: to, t: t)
         }
     }
 
@@ -202,29 +214,59 @@ final class GameScene: SCNScene {
         return hit
     }
 
-    private func spawnIfNeeded(distance: Float) {
+    private func spawnIfNeeded(distance: Float, speed: Float) {
         guard distance >= nextSpawnDistance else { return }
 
         spawnRow(distance: distance)
 
-        let spacing = max(GameConfig.minSpacing,
-                          GameConfig.startSpacing - distance * GameConfig.spacingLossPerMetre)
-        nextSpawnDistance = distance + spacing
+        // Spacing is a reaction-time budget converted to metres at the current
+        // speed, so the run gets harder without becoming unreactable.
+        let gap = max(GameConfig.minGapSeconds,
+                      GameConfig.startGapSeconds - distance * GameConfig.gapLossPerMetre)
+        nextSpawnDistance = distance + max(GameConfig.minSpacingMetres, gap * speed)
     }
 
     /// Blocks one or two lanes, never all three.
     private func spawnRow(distance: Float) {
         let lanes = Lane.allCases.shuffled()
+        let intoDoubles = max(0, distance - GameConfig.doubleRowStartDistance)
         let doubleChance = min(GameConfig.maxDoubleChance,
-                              distance / GameConfig.doubleRowRampDistance)
+                               intoDoubles / GameConfig.doubleRowRampDistance)
         let count = Float.random(in: 0..<1) < doubleChance ? 2 : 1
 
+        // The zone picks the obstacle mix, so zones differ in what they ask of
+        // you rather than only in how they look.
+        let zone = Zone.zone(atDistance: distance)
         for lane in lanes.prefix(count) {
             let obstacle = dequeueObstacle()
-            obstacle.spawn(kind: ObstacleKind.allCases.randomElement()!,
+            obstacle.spawn(kind: zone.randomObstacleKind(),
                            lane: lane,
                            z: -GameConfig.spawnDistance)
         }
+
+        // Reward taking the open lane: the trail goes in a lane this row
+        // leaves clear, just past the obstacles.
+        guard let freeLane = lanes.dropFirst(count).first,
+              Float.random(in: 0..<1) < GameConfig.coinTrailChance else { return }
+        spawnCoinTrail(lane: freeLane)
+    }
+
+    private func spawnCoinTrail(lane: Lane) {
+        let start = -GameConfig.spawnDistance + GameConfig.coinTrailOffset
+        for index in 0..<GameConfig.coinTrailLength {
+            let coin = dequeueCoin()
+            coin.spawn(lane: lane, z: start + Float(index) * GameConfig.coinSpacing)
+        }
+    }
+
+    private func dequeueCoin() -> Coin {
+        if let free = coins.first(where: { !$0.isActive }) {
+            return free
+        }
+        let coin = Coin()
+        coins.append(coin)
+        coinRoot.addChildNode(coin.node)
+        return coin
     }
 
     /// Reuses a parked obstacle, growing the pool only when none is free.
@@ -240,15 +282,11 @@ final class GameScene: SCNScene {
 
     // MARK: Background
 
-    /// A vertical gradient, drawn once and used as the sky.
-    private static func skyGradient() -> UIImage {
+    /// A vertical gradient used as the sky, rebuilt when the zone blend moves.
+    private static func skyGradient(top: UIColor, mid: UIColor, bottom: UIColor) -> UIImage {
         let size = CGSize(width: 8, height: 256)
         return UIGraphicsImageRenderer(size: size).image { context in
-            let colors = [
-                UIColor(red: 0.06, green: 0.08, blue: 0.16, alpha: 1).cgColor,
-                UIColor(red: 0.16, green: 0.22, blue: 0.38, alpha: 1).cgColor,
-                UIColor(red: 0.42, green: 0.36, blue: 0.52, alpha: 1).cgColor,
-            ]
+            let colors = [top.cgColor, mid.cgColor, bottom.cgColor]
             guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                             colors: colors as CFArray,
                                             locations: [0, 0.55, 1]) else { return }

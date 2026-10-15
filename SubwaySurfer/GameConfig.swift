@@ -37,20 +37,55 @@ enum GameConfig {
 
     // MARK: Speed and difficulty
 
-    static let startSpeed: Float = 9.0
-    static let maxSpeed: Float = 26.0
-    static let speedGainPerMetre: Float = 0.012
+    static let startSpeed: Float = 9.5
+    static let maxSpeed: Float = 34.0
+    /// Reaches `maxSpeed` at roughly 2400m.
+    static let speedGainPerMetre: Float = 0.011
 
     // MARK: Obstacles
 
     /// How far ahead of the camera obstacles appear. Fog hides the pop-in.
     static let spawnDistance: Float = 110
-    static let startSpacing: Float = 17
-    static let minSpacing: Float = 10.5
-    static let spacingLossPerMetre: Float = 0.004
+    /// Clear run-up before the first obstacle. Long enough to get oriented,
+    /// short enough that the run doesn't open on an empty corridor.
+    static let firstSpawnDistance: Float = 32
+
+    // Obstacle spacing is defined in **seconds of reaction time**, not metres.
+    // Speed more than quadruples over a run, so a fixed metre gap would get
+    // impossible rather than merely hard: 9m at 34 m/s leaves 0.26s to react,
+    // which is below human reaction time. Holding a time budget instead and
+    // multiplying by current speed keeps the ramp hard but fair.
+    static let startGapSeconds: Float = 1.6
+    static let minGapSeconds: Float = 0.55
+    /// Reaches `minGapSeconds` at roughly 1700m.
+    static let gapLossPerMetre: Float = 0.00062
+    /// Absolute floor, so obstacles can never overlap at low speed.
+    static let minSpacingMetres: Float = 8
+
+    /// Two-lane rows only begin after this distance, then ramp in.
+    static let doubleRowStartDistance: Float = 160
     /// Distance over which the chance of a two-lane row ramps to `maxDoubleChance`.
-    static let doubleRowRampDistance: Float = 4000
-    static let maxDoubleChance: Float = 0.45
+    static let doubleRowRampDistance: Float = 3000
+    static let maxDoubleChance: Float = 0.60
+
+    // MARK: Coins
+
+    /// Chance that an obstacle row also lays a coin trail in a free lane.
+    static let coinTrailChance: Float = 0.62
+    static let coinTrailLength = 4
+    static let coinSpacing: Float = 2.6
+    /// How far past the obstacle row the trail begins.
+    static let coinTrailOffset: Float = 4.0
+    /// Points per coin, on top of the distance score.
+    static let coinValue = 10
+
+    // MARK: Zones
+
+    /// How far the run travels before the environment changes. Kept short
+    /// enough that the first change arrives while the run is still easy.
+    static let zoneLength: Float = 450
+    /// Distance over which fog and sky blend into a new zone.
+    static let zoneTransitionLength: Float = 90
 
     // MARK: Frame timing
 

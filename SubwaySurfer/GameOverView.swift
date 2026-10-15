@@ -55,9 +55,10 @@ final class GameOverView: UIView {
         fatalError("GameOverView is created in code")
     }
 
-    func configure(score: Int, best: Int, isNewBest: Bool) {
+    func configure(score: Int, best: Int, coins: Int, isNewBest: Bool) {
         scoreLabel.text = "\(score)"
-        bestLabel.text = isNewBest ? "NEW BEST!" : "BEST \(best)"
+        let bestText = isNewBest ? "NEW BEST!" : "BEST \(best)"
+        bestLabel.text = coins > 0 ? "\(bestText)   ◉ \(coins)" : bestText
     }
 
     @objc private func restartTapped() {

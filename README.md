@@ -47,12 +47,73 @@ Obstacles are colour-coded by what they demand: **red** barriers are jumped,
 **blue** overhead bars are slid under, **purple** blocks must be gone around.
 A row never blocks all three lanes.
 
+Coin trails are laid in a lane each obstacle row leaves clear, so taking the
+open lane is rewarded. Coins are worth 10 points each on top of distance.
+
+## Zones
+
+The run passes through SUBWAY → CITY → DESERT → NEON and loops, changing every
+450m. Zones change the palette (floor, walls, stripes, fog, sky) and the
+obstacle mix, so they differ in what they ask of you and not just how they look.
+
+Two details make the change read well. Segments are re-dressed only when they
+recycle, ~130m ahead and past the fog, so the re-colouring is never witnessed.
+But the resulting *boundary* does travel into view, so segments take an
+interpolated palette across a 90m band rather than flipping — otherwise a crisp
+colour seam slides up the floor. Fog and sky are scene-global and can't be done
+per segment, so they're eased against distance, with the sky image rebuilt only
+when the blend moves a sixteenth.
+
+## Difficulty
+
+Starts easy and tightens: first obstacle 32m in, rows every 1.6s at the start
+and 0.55s at the top end, speed 9.5 to 34 m/s.
+
+Spacing is defined in **seconds of reaction time**, not metres, then multiplied
+by current speed. Speed more than triples over a run, so a fixed metre gap
+would stop being hard and start being impossible — 9m at 34 m/s leaves 0.26s to
+react, under human reaction time. The time budget keeps the tightest gap
+(0.55s) comfortably above the 0.36s a two-lane change needs.
+
+## Sound
+
+Effects are synthesised, not sourced:
+
+```sh
+python3 tools/make_sounds.py   # writes SubwaySurfer/Sounds/*.wav
+```
+
+Stdlib only — no numpy. Generating them avoids licence tracking, keeps the set
+consistent, and makes a tweak a number in the script rather than a new
+download. The audio session is `.ambient`, so the game mixes with the player's
+music instead of stopping it.
+
+## App icon
+
+Generated, not hand-drawn:
+
+```sh
+python3 tools/make_icon.py            # rewrites the 1024px asset
+python3 tools/make_icon.py --preview  # also emits 96px and 60px copies
+```
+
+A single 1024x1024 PNG goes into the asset catalog and Xcode derives the
+per-device sizes. Judge any change at the preview sizes rather than at full
+size — detail that reads well large turns to mush on a home screen.
+
+`ASSETCATALOG_COMPILER_APPICON_NAME` lives in `project.yml`, not the Xcode UI,
+for the same reason as `DEVELOPMENT_TEAM`: the project is regenerated.
+
 ## Architecture
 
 | File | Responsibility |
 |---|---|
 | `GameViewController` | Hosts the `SCNView`, owns run state (distance, speed, game over), drives the frame loop, queues swipes |
-| `GameScene` | The world: camera, lights, recycled track, obstacle pool, collision sweep |
+| `GameScene` | The world: camera, lights, recycled track, obstacle and coin pools, collision sweep |
+| `Zone` | A themed stretch of run: palette, obstacle weighting, and the blend between zones |
+| `TrackSegment` | One slab of corridor, with its materials to hand so recycling can re-dress it |
+| `Coin` | One pooled coin |
+| `SoundBank` | Preloaded effects, a few voices each so repeats overlap |
 | `Player` | The capsule, its lane, and the jump/slide state machine |
 | `Obstacle` / `ObstacleKind` | One pooled obstacle and the three things an obstacle can demand |
 | `Lane` | The three lane positions |
@@ -90,6 +151,5 @@ the scene before touching UI, so resetting a run can't race the simulation.
 
 ## Not done yet
 
-- Sound effects (jump / slide / collision). Collision has haptics only.
-- Coins, power-ups, rigged character models, multiple environments, Game Center.
-- No app icon or launch image.
+- Power-ups, rigged character models, Game Center leaderboards.
+- No launch image.
